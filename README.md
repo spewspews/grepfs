@@ -11,7 +11,7 @@ Start it on your remote fileserver in a listener
 
 Then you can connect to it with whatever 9p client you
 use. For unix, I recommend
-(9pfs)[https://github.com/spewspew/grepfs]! For plan 9
+[9pfs](https://github.com/spewspew/grepfs)! For plan 9
 you connect to it like normal:
 ```
 	srv tcp!remote!1234 grepfs
