@@ -25,14 +25,15 @@ that accepts regular expressions as follows:
 ```
 	echo -n regex > dirnamegrep
 ```
-That calls grep on the remote server with the
-regular expression "regex" that you provided.
-The results are returned by reading the same file:
+That calls grep on the remote server in the directory provided with
+the regular expression "regex" that you provided.  The results are
+returned by reading the same file:
+
 ```
 	cat dirnamegrep
 ```
 
-The following script can be very helpful:
+The following script is helpful:
 ```
 #!/bin/rc
 echo -n $1 > dirnamegrep
