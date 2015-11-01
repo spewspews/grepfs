@@ -8,7 +8,6 @@ Start it on your remote fileserver in a listener
 ```
 	aux/listen1 tcp!*!1234 grepfs /path/to/dirname
 ```
-
 Then you can connect to it with whatever 9p client you
 use. For unix, I recommend
 [9pfs](https://github.com/spewspew/grepfs)! For plan 9
@@ -28,11 +27,9 @@ that accepts regular expressions as follows:
 That calls grep on the remote server in the directory provided with
 the regular expression "regex" that you provided.  The results are
 returned by reading the same file:
-
 ```
 	cat dirnamegrep
 ```
-
 The following script is helpful:
 ```
 #!/bin/rc
