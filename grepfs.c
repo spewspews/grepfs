@@ -34,7 +34,6 @@ enum
 	Qgrep,
 	Waiting = 0,
 	Responding,
-	STACK = 8192
 };
 
 ulong	starttime;
@@ -226,14 +225,12 @@ doflags(Req *r)
 	flags = r->ifcall.data + sizeof(flagstr);
 	flagcount = r->ifcall.count - sizeof(flagstr);
 	free(grepflags);
-	if(dbg)
-		fprint(logfd, "flagcount: %d\n", flagcount);
 	if(flagcount <= 0)
 		grepflags = nil;
 	else
 		grepflags = smprint("-%.*s", flagcount, flags);
 }
-	
+
 void
 fswrite(Req *r)
 {
@@ -245,14 +242,11 @@ fswrite(Req *r)
 		if(grepstate == Responding)
 			respond(r, "Query in progress");
 		else{
-			if(strncmp(r->ifcall.data, flagstr, sizeof(flagstr)-1) == 0){
-				if(dbg) fprint(logfd, "flags: %.*s", r->ifcall.count, r->ifcall.data);
+			if(strncmp(r->ifcall.data, flagstr, sizeof(flagstr)-1) == 0)
 				doflags(r);
-				respond(r, nil);
-			}else{
+			else
 				dogrep(r);
-				respond(r, nil);
-			}
+			respond(r, nil);
 		}
 		break;
 	}
@@ -314,11 +308,10 @@ main(int argc, char **argv)
 	grepflags = estrdup9p("-n");
 	grepname = smprint("%sgrep", dname);
 	starttime = grepatime = grepmtime = time(nil);
-	if(dbg)	
+	if(dbg){	
 		logfd = create("/tmp/grepfs.log", OWRITE, 0644);
-	if(dbg)
 		postmountsrv(&fs, "grepfs", nil, 0);
-	else{
+	}else{
 		fs.infd = 0;
 		fs.outfd = 1;
 		srv(&fs);
