@@ -34,20 +34,19 @@ enum
 	Qgrep,
 	Waiting = 0,
 	Responding,
-	STACK = 8192
 };
 
-ulong	starttime;
-char	*grepuser, *grepname, *grepflags, *dname;
+char	*grepuser, *grepname, *grepflags;
 int	grepstate, greppid;
-ulong	grepatime, grepmtime, grepvers;
+ulong	starttime, grepatime, grepmtime, grepvers;
 uvlong	grepoffset;
 int 	grepout[2], greperr[2];
 
 void
 fsattach(Req *r)
 {
-	grepuser = estrdup9p(r->ifcall.uname);
+	if(grepuser == nil)
+		grepuser = estrdup9p(r->ifcall.uname);
 	r->fid->qid = (Qid){Qroot, 0, QTDIR};
 	r->ofcall.qid = r->fid->qid;
 	respond(r, nil);
@@ -98,13 +97,10 @@ fill(Dir *dir, uvlong path)
 	switch(path){
 	case Qroot:
 		dir->qid = (Qid){Qroot, 0, QTDIR};
-		dir->mode = 0755;
+		dir->mode = 0755 | DMDIR;
 		dir->atime = starttime;
 		dir->mtime = starttime;
 		dir->name = estrdup9p("/");
-		dir->uid = estrdup9p(grepuser);
-		dir->gid = estrdup9p("glenda");
-		dir->muid = estrdup9p("ron");
 		break;
 	case Qgrep:
 		dir->qid = (Qid){Qgrep, grepvers, QTFILE};
@@ -112,13 +108,13 @@ fill(Dir *dir, uvlong path)
 		dir->atime = grepatime;
 		dir->mtime = grepmtime;
 		dir->name = estrdup9p(grepname);
-		dir->uid = estrdup9p(grepuser);
-		dir->gid = estrdup9p("glenda");
-		dir->muid = estrdup9p("ron");
 		break;
 	default:
 		return -1;
 	}
+	dir->uid = estrdup9p(grepuser);
+	dir->gid = estrdup9p("glenda");
+	dir->muid = estrdup9p("ron");
 	return 0;
 }
 
@@ -157,7 +153,7 @@ void
 fsread(Req *r)
 {
 	int n;
-	char err[1024];
+	char err[128];
 
 	switch(r->fid->qid.path){
 	case Qroot:
@@ -190,8 +186,13 @@ fsread(Req *r)
 void
 dogrep(Req *r)
 {
-	char grepstr[1024];
+	char grepstr[1024], *regx;
+	int regxlen;
 
+	regx = r->ifcall.data;
+	regxlen = r->ifcall.count;
+	if(regx[regxlen - 1] == '\n')
+		regxlen--;
 	grepoffset = 0;
 	pipe(grepout);
 	pipe(greperr);
@@ -204,9 +205,9 @@ dogrep(Req *r)
 		dup(grepout[1], 1);
 		dup(greperr[1], 2);
 		if(grepflags == nil)
-			snprint(grepstr, sizeof(grepstr), "grep '%.*s' *", r->ifcall.count, r->ifcall.data);
+			snprint(grepstr, sizeof(grepstr), "grep '%.*s' *", regxlen, regx);
 		else
-			snprint(grepstr, sizeof(grepstr), "grep %s '%.*s' *", grepflags, r->ifcall.count, r->ifcall.data);
+			snprint(grepstr, sizeof(grepstr), "grep %s '%.*s' *", grepflags, regxlen, regx);
 		execl("/bin/rc", "rc", "-c", grepstr, nil);
 		exits("Exec failed");
 	}
@@ -225,9 +226,9 @@ doflags(Req *r)
 
 	flags = r->ifcall.data + sizeof(flagstr);
 	flagcount = r->ifcall.count - sizeof(flagstr);
+	if(flags[flagcount - 1] == '\n')
+		flagcount--;
 	free(grepflags);
-	if(dbg)
-		fprint(logfd, "flagcount: %d\n", flagcount);
 	if(flagcount <= 0)
 		grepflags = nil;
 	else
@@ -246,13 +247,11 @@ fswrite(Req *r)
 			respond(r, "Query in progress");
 		else{
 			if(strncmp(r->ifcall.data, flagstr, sizeof(flagstr)-1) == 0){
-				if(dbg) fprint(logfd, "flags: %.*s", r->ifcall.count, r->ifcall.data);
 				doflags(r);
-				respond(r, nil);
 			}else{
 				dogrep(r);
-				respond(r, nil);
 			}
+			respond(r, nil);
 		}
 		break;
 	}
@@ -280,22 +279,23 @@ void
 main(int argc, char **argv)
 {
 	Dir *dir;
-	char *dpath;
+	char *dpath, *dname;
 
 	ARGBEGIN{
-	case 'd':
+	case 'D':
 		dbg++;
 		break;
 	case 'c':
 		chatty9p++;
 		break;
 	default:
+		fprint(2, "Usage: grepfs /path/to/dir\n");
 		exits("usage");
 		break;
 	}ARGEND
 
 	if(argc != 1){
-		fprint(2, "Provide a directory to search\n");
+		fprint(2, "Usage: grepfs /path/to/dir\n");
 		exits("usage");
 	}
 	dpath = cleanname(argv[0]);
@@ -305,20 +305,19 @@ main(int argc, char **argv)
 	else
 		dname = dpath;
 	dir = dirstat(dpath);
-	if((dir->mode & DMDIR) == 0){
-		fprint(2, "Must be a directory, %s\n", argv[0]);
-		exits("Not a directory");
+	if(dir == nil || (dir->mode & DMDIR) == 0){
+		fprint(2, "Usage: %s must be a directory.\n", argv[0]);
+		exits("not a directory");
 	}
 	free(dir);
 	chdir(dpath);
 	grepflags = estrdup9p("-n");
 	grepname = smprint("%sgrep", dname);
 	starttime = grepatime = grepmtime = time(nil);
-	if(dbg)	
+	if(dbg){
 		logfd = create("/tmp/grepfs.log", OWRITE, 0644);
-	if(dbg)
 		postmountsrv(&fs, "grepfs", nil, 0);
-	else{
+	}else{
 		fs.infd = 0;
 		fs.outfd = 1;
 		srv(&fs);
