@@ -6,19 +6,18 @@
 
 /*
  * To start:
- * 	aux/listen1 tcp!*!1234 grepfs /path/to/dir/*
- * The '*' is now important.
+ * 	aux/listen1 tcp!*!1234 grepfs /path/to/dirname
  *
  * Searching:
- * 	echo 'ron' > grepctl
- * 	cat grepctl
+ * 	echo -n 'rminnich' > dirnamegrep
+ * 	cat dirnamegrep
  * 
  * Changing the grep flags (initially it is grep -n)
- * 	echo 'flags ni' > grepctl
- * 	echo 'subject' > grepctl
- * 	cat grepctl (will return Subject and subject)
+ * 	echo -n 'flags ni' > dirnamegrep
+ * 	echo -n 'subject' > dirnamegrep
+ * 	cat dirnamegrep (will return Subject and subject)
  * Clear all grep flags:
- * 	echo 'flags' > grepctl
+ * 	echo -n 'flags' > dirnamegrep (echo -n 'flags ' also works)
  *
  */
 
@@ -28,7 +27,6 @@ int dbg;
 char Enoent[] = "Not found";
 char Eperm[] = "Permission denied";
 char flagstr[] = "flags";
-char grepname[] = "grepctl";
 
 enum
 {
@@ -38,11 +36,11 @@ enum
 	Responding,
 };
 
-char	*grepuser, *grepflags, **grepargs;
-int	grepstate, greppid, nfiles;
+char	*grepuser, *grepname, *grepflags;
+int	grepstate, greppid;
 ulong	starttime, grepatime, grepmtime, grepvers;
 uvlong	grepoffset;
-int 	grepout[2];
+int 	grepout[2], greperr[2];
 
 void
 fsattach(Req *r)
@@ -88,7 +86,7 @@ Perm:
 }
 
 int
-fill(Dir *dir, int path)
+fill(Dir *dir, uvlong path)
 {
 	ulong mode;
 
@@ -133,8 +131,14 @@ fsdirgen(int n, Dir *dir, void*)
 int
 grepread(Req *r, char *err, int esize)
 {
-	int n;
+	int o, n;
 
+	if((o = read(greperr[0], err, esize)) > 0){
+		while((n = read(greperr[0], err+o, esize-o)) > 0)
+			o += n;
+		err[o-1] = '\0';
+		return -1;
+	}
 	if(r->ifcall.offset != grepoffset){
 		strecpy(err, err+esize, "No seeking");
 		return -1;
@@ -151,7 +155,7 @@ fsread(Req *r)
 	int n;
 	char err[128];
 
-	switch((int)r->fid->qid.path){
+	switch(r->fid->qid.path){
 	case Qroot:
 		dirread9p(r, fsdirgen, nil);
 		respond(r, nil);
@@ -166,6 +170,7 @@ fsread(Req *r)
 				respond(r, nil);
 			if(n <= 0){
 				close(grepout[0]);
+				close(greperr[0]);
 				if(waitpid() != greppid)
 					exits("Pid was wrong");
 				greppid = 0;
@@ -188,31 +193,29 @@ dogrep(Req *r)
 	regxlen = r->ifcall.count;
 	if(regx[regxlen - 1] == '\n')
 		regxlen--;
-        if(regxlen > 1024){
-		respond(r , "Regex too long");
-		return;
-	}
 	grepoffset = 0;
 	pipe(grepout);
+	pipe(greperr);
 	greppid = fork();
 	if(greppid == -1)
 		exits("Fork failed");
 	if(greppid == 0){
 		close(grepout[0]);
+		close(greperr[0]);
 		dup(grepout[1], 1);
-		dup(grepout[1], 2);
-		close(grepout[1]);
-		snprint(grepstr, sizeof(grepstr), "%.*s", regxlen, regx);
-		grepargs[1] = grepflags;
-		grepargs[2] = grepstr;
-		exec("/bin/grep", grepargs);
+		dup(greperr[1], 2);
+		if(grepflags == nil)
+			snprint(grepstr, sizeof(grepstr), "grep '%.*s' *", regxlen, regx);
+		else
+			snprint(grepstr, sizeof(grepstr), "grep %s '%.*s' *", grepflags, regxlen, regx);
+		execl("/bin/rc", "rc", "-c", grepstr, nil);
 		exits("Exec failed");
 	}
 	close(grepout[1]);
+	close(greperr[1]);
 	grepstate = Responding;
 	grepmtime = time(nil);
 	grepvers++;
-	respond(r, nil);
 }
 
 void
@@ -225,24 +228,17 @@ doflags(Req *r)
 	flagcount = r->ifcall.count - sizeof(flagstr);
 	if(flags[flagcount - 1] == '\n')
 		flagcount--;
-	if(flagcount > 10){
-		respond(r, "Too many flags");
-		return;
-	}
 	free(grepflags);
 	if(flagcount <= 0)
-		grepflags = estrdup9p("--");
+		grepflags = nil;
 	else
 		grepflags = smprint("-%.*s", flagcount, flags);
-	if(grepflags == nil)
-		exits("Could not set grepflags");
-	respond(r, nil);
 }
 	
 void
 fswrite(Req *r)
 {
-	switch((int)r->fid->qid.path){
+	switch(r->fid->qid.path){
 	case Qroot:
 		respond(r, Eperm);
 		break;
@@ -250,10 +246,12 @@ fswrite(Req *r)
 		if(grepstate == Responding)
 			respond(r, "Query in progress");
 		else{
-			if(strncmp(r->ifcall.data, flagstr, sizeof(flagstr)-1) == 0)
+			if(strncmp(r->ifcall.data, flagstr, sizeof(flagstr)-1) == 0){
 				doflags(r);
-			else
+			}else{
 				dogrep(r);
+			}
+			respond(r, nil);
 		}
 		break;
 	}
@@ -280,7 +278,8 @@ Srv fs = {
 void
 main(int argc, char **argv)
 {
-	int i;
+	Dir *dir;
+	char *dpath, *dname;
 
 	ARGBEGIN{
 	case 'D':
@@ -290,21 +289,30 @@ main(int argc, char **argv)
 		chatty9p++;
 		break;
 	default:
-		fprint(2, "Usage: grepfs /path/to/files/*\n");
+		fprint(2, "Usage: grepfs /path/to/dir\n");
 		exits("usage");
 		break;
 	}ARGEND
 
-	if(argc < 1){
-		fprint(2, "Usage: grepfs /path/to/files/*\n");
+	if(argc != 1){
+		fprint(2, "Usage: grepfs /path/to/dir\n");
 		exits("usage");
 	}
-	grepargs = emalloc9p(sizeof(*grepargs) * (argc + 4));
-	*grepargs = "grep";
-	for(i = 0; i < argc; i++)
-		grepargs[i+3] = argv[i];
-	grepargs[i+3] = nil;
+	dpath = cleanname(argv[0]);
+	dname = utfrrune(dpath, '/');
+	if(dname != nil)
+		dname++;
+	else
+		dname = dpath;
+	dir = dirstat(dpath);
+	if(dir == nil || (dir->mode & DMDIR) == 0){
+		fprint(2, "Usage: %s must be a directory.\n", argv[0]);
+		exits("not a directory");
+	}
+	free(dir);
+	chdir(dpath);
 	grepflags = estrdup9p("-n");
+	grepname = smprint("%sgrep", dname);
 	starttime = grepatime = grepmtime = time(nil);
 	if(dbg){
 		logfd = create("/tmp/grepfs.log", OWRITE, 0644);
