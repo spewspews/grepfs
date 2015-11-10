@@ -6,7 +6,7 @@ a remote filesystem.
 
 Start it on your remote fileserver in a listener
 ```
-	aux/listen1 tcp!*!1234 grepfs /path/to/dirname
+	aux/listen1 tcp!*!1234 grepfs /path/to/files/*
 ```
 Then you can connect to it with whatever 9p client you
 use. For unix, I recommend
@@ -18,11 +18,11 @@ you connect to it like normal:
 ```
 This will put in your directory a single file:
 ```
-	dirnamegrep
+	grepctl
 ```
 that accepts regular expressions as follows:
 ```
-	echo -n regex > dirnamegrep
+	echo -n regex > grepctl
 ```
 That calls grep on the remote server in the directory provided with
 the regular expression "regex" that you provided.  The results are
@@ -33,6 +33,6 @@ returned by reading the same file:
 The following script is helpful:
 ```
 #!/bin/rc
-echo -n $1 > dirnamegrep
-cat dirnamegrep
+echo -n $1 > grepctl
+cat grepctl
 ```
